@@ -1,0 +1,40 @@
+[project]
+name = "basic-ai-agentc-app"
+version = "0.1.0"
+description = "A basic FastAPI backend with MVC structure"
+requires-python = ">=3.9"
+
+dependencies = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "pydantic>=2.5.0",
+    "pydantic-settings>=2.1.0",
+    "requests>=2.32.5",
+    "google-genai>=1.47.0",
+    "streamlit>=1.50.0",
+    "httpx>=0.28.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.4.0",
+    "httpx>=0.25.0",
+    "ruff>=0.1.0",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.4.0",
+    "httpx>=0.25.0",
+    "ruff>=0.1.0",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py39"
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+
+[tool.ruff.format]
+quote-style = "double"
