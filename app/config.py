@@ -7,8 +7,9 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8000
     reload: bool = True
-    gemini_api_key: str = ""
-    gemini_model: str = "gemini-2.0-flash-lite"
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
+    weather_api_key: str = ""
 
     model_config = {"env_file": ".env", "extra": "ignore"}
 

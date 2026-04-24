@@ -1,13 +1,14 @@
 """Module for tools definition."""
 
-import os
-
 import requests
+from app.config import settings
 
 
 def get_current_weather(location: str) -> dict[str, str]:
     """Get the current weather for a given location."""
-    weather_api_key = os.getenv("WEATHER_API_KEY")
+    weather_api_key = settings.weather_api_key
+    if not weather_api_key:
+        raise ValueError("Missing WEATHER_API_KEY in environment")
     response = requests.get(
         "https://api.weatherapi.com/v1/current.json",
         params={"key": weather_api_key, "q": location, "aqi": "no"},
