@@ -1,9 +1,13 @@
 """Streamlit UI for the travel planning assistant."""
 
+import json
+import time
+
 import httpx
 import streamlit as st
 
 BACKEND_URL = "http://localhost:8000/chat"
+BACKEND_STREAM_URL = "http://localhost:8000/chat/stream"
 
 st.set_page_config(page_title="Travel Planner Assistant", page_icon=":luggage:")
 st.title("Travel Planner Assistant")
@@ -29,6 +33,30 @@ st.markdown(
     div[data-testid="stVerticalBlock"] > div:has(> div [data-testid="stPills"]) p {
         font-size: 0.8rem;
         margin-bottom: 0.2rem;
+    }
+    .llm-log-block {
+        padding: 0.35rem 0.1rem 0.2rem 0.1rem;
+        color: rgba(230, 230, 230, 0.86);
+        font-size: 0.75rem;
+        line-height: 1.35;
+        white-space: pre-wrap;
+        font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+    }
+    .stExpander {
+        border: 1px solid rgba(255, 255, 255, 0.12) !important;
+        border-radius: 0.55rem !important;
+        background: rgba(140, 140, 140, 0.14) !important;
+    }
+    .stExpander > details {
+        background: transparent !important;
+    }
+    .stExpander > details > summary {
+        background: rgba(160, 160, 160, 0.16) !important;
+        border-radius: 0.5rem 0.5rem 0 0 !important;
+    }
+    .stExpander > details > div[role="region"] {
+        background: rgba(130, 130, 130, 0.13) !important;
+        border-top: 1px solid rgba(255, 255, 255, 0.08) !important;
     }
     </style>
     """,
@@ -73,6 +101,55 @@ def ask_backend(prompt: str) -> dict:
         }
 
 
+def ask_backend_stream(prompt: str, log_placeholder) -> dict:
+    log_lines: list[str] = []
+    try:
+        with httpx.stream(
+            "POST",
+            BACKEND_STREAM_URL,
+            json={"message": prompt},
+            timeout=120.0,
+        ) as response:
+            response.raise_for_status()
+            for raw_line in response.iter_lines():
+                if not raw_line or not raw_line.startswith("data: "):
+                    continue
+                payload = json.loads(raw_line[len("data: ") :])
+                event_type = payload.get("type")
+
+                if event_type == "log":
+                    line = payload.get("message", "")
+                    if line:
+                        log_lines.append(line)
+                        log_placeholder.caption("Live LLM logs")
+                        log_placeholder.code("\n".join(log_lines[-12:]))
+                elif event_type == "final":
+                    result = payload.get("result", {})
+                    return {
+                        "answer": result.get("answer", ""),
+                        "used_tools": result.get("used_tools", []),
+                        "weather_location": result.get("weather_location"),
+                        "logs": log_lines,
+                    }
+                elif event_type == "error":
+                    return {
+                        "answer": f"Backend stream error: {payload.get('message', 'unknown error')}",
+                        "used_tools": [],
+                        "weather_location": None,
+                        "logs": log_lines,
+                    }
+    except Exception:
+        # Fallback to non-stream call if stream is unavailable.
+        return ask_backend(prompt)
+
+    return {
+        "answer": "No final response received from stream.",
+        "used_tools": [],
+        "weather_location": None,
+        "logs": log_lines,
+    }
+
+
 if "messages" not in st.session_state:
     st.session_state.messages = []
 if "pending_prompt" not in st.session_state:
@@ -85,6 +162,14 @@ if "show_quick_actions" not in st.session_state:
 for message in st.session_state.messages:
     with st.chat_message(message["role"]):
         st.markdown(message["content"])
+        logs = message.get("logs", [])
+        if logs:
+            duration_s = message.get("duration_s", 0.0)
+            with st.expander(f"Worked for {duration_s:.1f} seconds", expanded=False):
+                st.markdown(
+                    f'<div class="llm-log-block">{"<br/>".join(logs)}</div>',
+                    unsafe_allow_html=True,
+                )
 
 typed_prompt = st.chat_input("Ask about weather, risk alerts, or outfit advice...")
 prompt = st.session_state.pending_prompt or typed_prompt
@@ -96,10 +181,29 @@ if prompt:
     st.session_state.messages.append({"role": "user", "content": prompt})
 
     with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            result = ask_backend(prompt)
+        log_placeholder = st.empty()
+        started_at = time.perf_counter()
+        result = ask_backend_stream(prompt, log_placeholder)
+        duration_s = time.perf_counter() - started_at
+        logs = result.get("logs", [])
+        if logs:
+            with log_placeholder.container():
+                with st.expander(f"Worked for {duration_s:.1f} seconds", expanded=False):
+                    st.markdown(
+                        f'<div class="llm-log-block">{"<br/>".join(logs)}</div>',
+                        unsafe_allow_html=True,
+                    )
+        else:
+            log_placeholder.empty()
         st.markdown(result["answer"])
-    st.session_state.messages.append({"role": "assistant", "content": result["answer"]})
+    st.session_state.messages.append(
+        {
+            "role": "assistant",
+            "content": result["answer"],
+            "logs": logs,
+            "duration_s": duration_s,
+        }
+    )
 
     used_tools = result.get("used_tools", [])
     st.session_state.show_quick_actions = "get_current_weather" in used_tools

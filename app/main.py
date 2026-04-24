@@ -1,7 +1,12 @@
 """Main FastAPI application."""
 
+import json
+import queue
+import threading
+
 from fastapi import FastAPI
 from pydantic import BaseModel
+from starlette.responses import StreamingResponse
 
 from app.agent import run_agent
 from app.config import settings
@@ -36,3 +41,31 @@ async def chat(request: ChatRequest):
         used_tools=result.get("used_tools", []),
         weather_location=result.get("weather_location"),
     )
+
+
+@app.post("/chat/stream")
+async def chat_stream(request: ChatRequest):
+    events: queue.Queue = queue.Queue()
+
+    def on_log(log_message: str) -> None:
+        events.put({"type": "log", "message": log_message})
+
+    def worker() -> None:
+        try:
+            result = run_agent(request.message, log_callback=on_log)
+            events.put({"type": "final", "result": result})
+        except Exception as e:
+            events.put({"type": "error", "message": str(e)})
+        finally:
+            events.put({"type": "done"})
+
+    threading.Thread(target=worker, daemon=True).start()
+
+    def event_stream():
+        while True:
+            event = events.get()
+            yield f"data: {json.dumps(event)}\n\n"
+            if event.get("type") == "done":
+                break
+
+    return StreamingResponse(event_stream(), media_type="text/event-stream")

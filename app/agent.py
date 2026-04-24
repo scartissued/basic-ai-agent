@@ -3,6 +3,7 @@
 import json
 import logging
 import time
+from collections.abc import Callable
 
 from openai import APIStatusError, OpenAI, RateLimitError
 
@@ -41,14 +42,18 @@ def _llm_log(message: str) -> None:
     print(f"[LLM] {message}", flush=True)
 
 
-def _generate_with_retry(client, contents, config):
+def _emit_log(message: str, log_callback: Callable[[str], None] | None) -> None:
+    _llm_log(message)
+    if log_callback:
+        log_callback(message)
+
+
+def _generate_with_retry(client, contents, config, log_callback=None):
     for attempt in range(MAX_RETRIES):
         try:
-            _llm_log(
-                "Calling OpenAI "
-                f"model={settings.openai_model} "
-                f"(retry_attempt={attempt + 1}/{MAX_RETRIES}, "
-                f"message_count={len(contents)})"
+            _emit_log(
+                "Calling LLM",
+                log_callback,
             )
             return client.chat.completions.create(
                 model=settings.openai_model,
@@ -99,9 +104,11 @@ def _execute_tool(tool_name: str, tool_args: dict) -> ToolExecutionResponse:
         return ToolExecutionResponse(success=False, error=str(e))
 
 
-def run_agent(query: str) -> dict:
+def run_agent(query: str, log_callback: Callable[[str], None] | None = None) -> dict:
     client = _init_client()
-    _llm_log(f"Starting agent run (query={_truncate_for_log(query, 300)})")
+    _emit_log(
+        f"Starting agent run (query={_truncate_for_log(query, 300)})", log_callback
+    )
     used_tools: list[str] = []
     weather_location: str | None = None
 
@@ -116,25 +123,24 @@ def run_agent(query: str) -> dict:
     }
 
     for iteration in range(MAX_ITERATIONS):
-        response = _generate_with_retry(client, contents, config)
+        response = _generate_with_retry(client, contents, config, log_callback)
         text = response.choices[0].message.content or ""
-        _llm_log(
-            "LLM raw response "
-            f"(iteration={iteration + 1}/{MAX_ITERATIONS}): "
-            f"{_truncate_for_log(text)}"
+        _emit_log(
+            f"LLM raw response: {_truncate_for_log(text)}",
+            log_callback,
         )
         parsed = _parse_response(text)
-        _llm_log(
-            "LLM parsed response keys "
-            f"(iteration={iteration + 1}/{MAX_ITERATIONS}): "
-            f"{list(parsed.keys())}"
+        _emit_log(
+            f"LLM parsed response keys: {list(parsed.keys())}",
+            log_callback,
         )
 
         contents.append({"role": "assistant", "content": text})
 
         if "answer" in parsed:
-            _llm_log(
-                f"Agent resolved with answer (iteration={iteration + 1}/{MAX_ITERATIONS})"
+            _emit_log(
+                "Agent resolved with answer",
+                log_callback,
             )
             return {
                 "answer": parsed["answer"],
@@ -145,15 +151,16 @@ def run_agent(query: str) -> dict:
         if "tool" in parsed:
             tool_name = parsed["tool"]
             tool_args = parsed.get("args", {})
-            _llm_log(
+            _emit_log(
                 "Executing tool "
-                f"(iteration={iteration + 1}/{MAX_ITERATIONS}, "
-                f"tool={tool_name}, "
-                f"args={_truncate_for_log(json.dumps(tool_args), 300)})"
+                f"(tool={tool_name}, "
+                f"args={_truncate_for_log(json.dumps(tool_args), 300)})",
+                log_callback,
             )
             tool_result = _execute_tool(tool_name, tool_args)
-            _llm_log(
-                f"Tool result (tool={tool_name}, success={tool_result.success})"
+            _emit_log(
+                f"Tool result (tool={tool_name}, success={tool_result.success})",
+                log_callback,
             )
             used_tools.append(tool_name)
             if (
@@ -168,14 +175,17 @@ def run_agent(query: str) -> dict:
             )
             contents.append({"role": "user", "content": tool_feedback})
         else:
-            _llm_log("LLM returned non-tool/non-answer payload; returning raw text")
+            _emit_log(
+                "LLM returned non-tool/non-answer payload; returning raw text",
+                log_callback,
+            )
             return {
                 "answer": text,
                 "used_tools": used_tools,
                 "weather_location": weather_location,
             }
 
-    _llm_log("Agent stopped after max iterations without final answer")
+    _emit_log("Agent stopped after max iterations without final answer", log_callback)
     return {
         "answer": "Sorry, I could not resolve your request after multiple attempts.",
         "used_tools": used_tools,
