@@ -1,81 +1,115 @@
-# FastAPI MVC Backend
+# Travel Planner Assistant
 
-A basic FastAPI backend with MVC structure using `uv` as the package manager.
+A small FastAPI + Streamlit travel assistant that uses OpenAI tool-calling with weather-based chains:
+
+- Current weather lookup
+- Weather risk alerts
+- Outfit advice
+- Live LLM logs streamed to UI (then collapsed in an accordion)
+
+## Tech Stack
+
+- Backend: FastAPI
+- UI: Streamlit
+- LLM: OpenAI Chat Completions API
+- Weather data: WeatherAPI
+- Package manager: `uv`
 
 ## Project Structure
 
-```
+```text
 .
 ├── app/
-│   ├── __init__.py
-│   ├── config.py          # Configuration settings
-│   ├── main.py            # FastAPI app entry point
-│   ├── controllers/       # API route handlers
-│   │   ├── __init__.py
-│   │   └── item_controller.py
-│   ├── models/            # Data models
-│   │   ├── __init__.py
-│   │   └── item.py
-│   ├── schemas/           # Pydantic request/response schemas
-│   │   ├── __init__.py
-│   │   └── item.py
-│   └── services/          # Business logic
-│       ├── __init__.py
-│       └── item_service.py
-├── pyproject.toml         # Project configuration & dependencies
-├── run.sh                 # Development server script
-└── run_prod.sh            # Production server script
+│   ├── agent.py           # LLM loop, tool routing, log callbacks
+│   ├── config.py          # Environment-based settings
+│   └── main.py            # FastAPI app + /chat and /chat/stream
+├── prompt/
+│   └── prompt.py          # System prompt + tool instructions
+├── schema/
+│   └── weather.py         # Pydantic schemas for weather/tool responses
+├── tools/
+│   ├── tools.py           # Primitive weather API tool
+│   └── chains.py          # Risk alert and outfit chain functions
+├── ui/
+│   └── app.py             # Streamlit chat UI with quick actions/log accordion
+└── pyproject.toml
 ```
 
-## Setup
+## Prerequisites
 
-### 1. Install uv (if not already installed)
+1. Python 3.9+
+2. `uv` installed
+
+Install `uv` if needed:
 
 ```bash
 curl -LsSf https://astral.sh/uv/install.sh | sh
 ```
 
-### 2. Install dependencies
+## Setup
+
+1. Install dependencies:
 
 ```bash
 uv sync
 ```
 
-## Running the Server
+2. Create `.env` in project root:
 
-### Development (with auto-reload)
+```bash
+OPENAI_API_KEY=your_openai_key
+WEATHER_API_KEY=your_weatherapi_key
+```
 
+Optional:
+
+```bash
+OPENAI_MODEL=gpt-4o-mini
+```
+
+## Run Locally
+
+Start backend:
+
+```bash
 uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+```
 
-### Production
+Start UI in another terminal:
 
-uv run uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 4
+```bash
+uv run streamlit run ui/app.py
+```
+
+Open:
+
+- UI: [http://localhost:8501](http://localhost:8501)
+- Backend docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
 ## API Endpoints
 
-- `GET /` - Root endpoint
-- `GET /health` - Health check
-- `GET /items` - List all items
-- `GET /items/{id}` - Get item by ID
-- `POST /items` - Create new item
-- `PUT /items/{id}` - Update item
-- `DELETE /items/{id}` - Delete item
+- `GET /` - Basic welcome response
+- `POST /chat` - Standard chat response
+  - Input: `{"message":"..."}`
+  - Output: `{"answer":"...","used_tools":[...],"weather_location":"..."}`
+- `POST /chat/stream` - SSE stream for live LLM logs + final result
 
-## Interactive API Docs
+## Current Behavior
 
-Once running, visit:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
+- Quick-action pills appear only when backend confirms `get_current_weather` was used.
+- Assistant logs are streamed live in UI, then shown under an accordion:
+  - Label format: `Worked for X.X seconds`
+- LLM/tool logs are also printed in backend terminal.
 
-## Development Commands
+## Useful Dev Commands
 
 ```bash
-# Run tests
-uv run pytest
-
-# Run linter
+# Lint
 uv run ruff check .
 
-# Format code
+# Format
 uv run ruff format .
+
+# Compile sanity check
+uv run python -m compileall app ui tools schema prompt
 ```
