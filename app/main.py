@@ -19,6 +19,8 @@ class ChatRequest(BaseModel):
 
 class ChatResponse(BaseModel):
     answer: str
+    used_tools: list[str] = []
+    weather_location: str | None = None
 
 
 @app.get("/")
@@ -28,5 +30,9 @@ async def root():
 
 @app.post("/chat", response_model=ChatResponse)
 async def chat(request: ChatRequest):
-    answer = run_agent(request.message)
-    return ChatResponse(answer=answer)
+    result = run_agent(request.message)
+    return ChatResponse(
+        answer=result["answer"],
+        used_tools=result.get("used_tools", []),
+        weather_location=result.get("weather_location"),
+    )

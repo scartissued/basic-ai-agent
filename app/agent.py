@@ -8,13 +8,21 @@ from openai import APIStatusError, OpenAI, RateLimitError
 
 from app.config import settings
 from prompt.prompt import system_prompt
-from schema.weather import TemperatureData, WeatherResponse
+from schema.weather import (
+    OutfitRecommendationData,
+    RiskAlertData,
+    TemperatureData,
+    ToolExecutionResponse,
+)
+from tools.chains import outfit_recommendation_chain, weather_risk_alert_chain
 from tools.tools import get_current_weather
 
 logger = logging.getLogger("app.llm")
 
 TOOL_MAP = {
     "get_current_weather": get_current_weather,
+    "weather_risk_alert_chain": weather_risk_alert_chain,
+    "outfit_recommendation_chain": outfit_recommendation_chain,
 }
 
 MAX_ITERATIONS = 5
@@ -70,23 +78,32 @@ def _parse_response(text: str) -> dict:
         return {"answer": text}
 
 
-def _execute_tool(tool_name: str, tool_args: dict) -> WeatherResponse:
+def _execute_tool(tool_name: str, tool_args: dict) -> ToolExecutionResponse:
     func = TOOL_MAP.get(tool_name)
     if not func:
-        return WeatherResponse(success=False, error=f"Unknown tool: {tool_name}")
+        return ToolExecutionResponse(success=False, error=f"Unknown tool: {tool_name}")
 
     try:
         result = func(**tool_args)
-        data = TemperatureData(**result)
-        return WeatherResponse(success=True, data=data)
+        if tool_name == "get_current_weather":
+            data = TemperatureData(**result).model_dump()
+        elif tool_name == "weather_risk_alert_chain":
+            data = RiskAlertData(**result).model_dump()
+        elif tool_name == "outfit_recommendation_chain":
+            data = OutfitRecommendationData(**result).model_dump()
+        else:
+            data = result
+        return ToolExecutionResponse(success=True, data=data)
     except Exception as e:
         logger.exception("Tool execution failed")
-        return WeatherResponse(success=False, error=str(e))
+        return ToolExecutionResponse(success=False, error=str(e))
 
 
-def run_agent(query: str) -> str:
+def run_agent(query: str) -> dict:
     client = _init_client()
     _llm_log(f"Starting agent run (query={_truncate_for_log(query, 300)})")
+    used_tools: list[str] = []
+    weather_location: str | None = None
 
     contents = [
         {"role": "system", "content": system_prompt},
@@ -119,7 +136,11 @@ def run_agent(query: str) -> str:
             _llm_log(
                 f"Agent resolved with answer (iteration={iteration + 1}/{MAX_ITERATIONS})"
             )
-            return parsed["answer"]
+            return {
+                "answer": parsed["answer"],
+                "used_tools": used_tools,
+                "weather_location": weather_location,
+            }
 
         if "tool" in parsed:
             tool_name = parsed["tool"]
@@ -134,6 +155,13 @@ def run_agent(query: str) -> str:
             _llm_log(
                 f"Tool result (tool={tool_name}, success={tool_result.success})"
             )
+            used_tools.append(tool_name)
+            if (
+                tool_name == "get_current_weather"
+                and tool_result.success
+                and tool_result.data is not None
+            ):
+                weather_location = tool_result.data.get("location")
 
             tool_feedback = (
                 f"Tool result for {tool_name}:\n{tool_result.model_dump_json()}"
@@ -141,7 +169,15 @@ def run_agent(query: str) -> str:
             contents.append({"role": "user", "content": tool_feedback})
         else:
             _llm_log("LLM returned non-tool/non-answer payload; returning raw text")
-            return text
+            return {
+                "answer": text,
+                "used_tools": used_tools,
+                "weather_location": weather_location,
+            }
 
     _llm_log("Agent stopped after max iterations without final answer")
-    return "Sorry, I could not resolve your request after multiple attempts."
+    return {
+        "answer": "Sorry, I could not resolve your request after multiple attempts.",
+        "used_tools": used_tools,
+        "weather_location": weather_location,
+    }
